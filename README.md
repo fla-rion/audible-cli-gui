@@ -26,7 +26,13 @@ A local macOS app to download and convert your Audible audiobooks (German market
 
 1. Download the latest `Audible.Downloader.dmg` from [Releases](https://github.com/fla-rion/audible-cli-gui/releases)
 2. Open the DMG and drag **Audible Downloader** into your Applications folder
-3. On first launch: right-click → Open (macOS Gatekeeper warning)
+3. **Gatekeeper entsperren** — einmalig im Terminal ausführen:
+   ```bash
+   xattr -cr "/Applications/Audible Downloader.app"
+   ```
+4. App starten
+
+> Die App ist mit einem lokalen Zertifikat signiert, aber nicht von Apple notarisiert (kein Developer Account erforderlich). Der `xattr`-Befehl entfernt die Quarantäne-Flag — danach öffnet sie sich normal.
 
 ## First-time Setup
 
