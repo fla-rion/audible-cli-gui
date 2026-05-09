@@ -1,0 +1,1386 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Audible Downloader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', sans-serif; }
+
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #f59e0b66; border-radius: 99px; }
+
+    .card-hover { transition: transform .15s ease, box-shadow .15s ease; }
+    .card-hover:hover { transform: translateY(-3px); box-shadow: 0 10px 28px rgba(0,0,0,.5); }
+
+    .pbar { transition: width .35s ease; }
+
+    .cover-ph {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2.4rem; font-weight: 700; color: rgba(255,255,255,.85);
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin .9s linear infinite; }
+
+    @keyframes fadein { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+    .fadein { animation: fadein .2s ease; }
+
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.75);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1rem;
+      z-index: 9999;
+    }
+
+    [x-cloak] { display: none !important; }
+
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0;
+      margin: -1px; overflow: hidden; clip: rect(0,0,0,0);
+      white-space: nowrap; border: 0;
+    }
+
+    /* Range inputs */
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      background: transparent; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-track {
+      background: #3f3f46; height: 4px; border-radius: 2px;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px; border-radius: 50%;
+      background: #f59e0b; margin-top: -4px;
+    }
+    input[type="range"]:focus { outline: none; }
+    input[type="range"]:focus-visible::-webkit-slider-thumb {
+      box-shadow: 0 0 0 3px rgba(245,158,11,0.5);
+    }
+
+    /* Seek-range overlay: unsichtbar, liegt über visueller Leiste */
+    .seek-range {
+      position: absolute; inset: 0; width: 100%;
+      opacity: 0; cursor: pointer; height: 100%;
+      margin: 0; padding: 0;
+    }
+    .seek-range::-webkit-slider-track { height: 100%; background: transparent; }
+    .seek-range::-webkit-slider-thumb { opacity: 0; }
+    /* Fokus-Indikator für Seek-Bar */
+    .seek-wrap:focus-within .seek-track { ring: 2px; }
+    .seek-range:focus-visible { outline: none; }
+    .seek-range:focus-visible + .seek-track { outline: 2px solid #f59e0b; outline-offset: 2px; border-radius: 2px; }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen" x-data="app()" x-cloak x-init="init()">
+
+<!-- Screenreader-Ankündigungen -->
+<div aria-live="polite" aria-atomic="true" class="sr-only" x-text="announcement"></div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     LOGIN
+══════════════════════════════════════════════════════════ -->
+<div x-show="!isLoggedIn" class="fixed inset-0 bg-zinc-950 flex items-center justify-center" style="z-index:100">
+  <div class="w-full max-w-sm fadein px-4">
+
+    <div class="text-center mb-8">
+      <div class="w-16 h-16 bg-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg" style="box-shadow:0 0 32px rgba(245,158,11,.3)">
+        <svg class="w-9 h-9 text-zinc-950" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3C6.48 3 2 7.48 2 13c0 3.69 1.99 6.93 4.98 8.69L8 20.5V19c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v1.5l1.02 1.19C19.01 19.93 21 16.69 21 13c0-5.52-4.48-10-9-10z"/>
+        </svg>
+      </div>
+      <h1 class="text-2xl font-bold">Audible Downloader</h1>
+      <p class="text-zinc-500 text-sm mt-1">Mit Amazon-Konto anmelden</p>
+    </div>
+
+    <div x-show="!loginLoading" class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800 shadow-2xl space-y-4">
+      <div x-show="loginError" role="alert" class="bg-red-950 border border-red-800 rounded-lg px-4 py-3 text-red-300 text-sm" x-text="loginError"></div>
+
+      <div>
+        <label for="locale-select" class="text-xs font-medium text-zinc-400 block mb-1.5">Marktplatz</label>
+        <select id="locale-select" x-model="loginForm.locale"
+          class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-500">
+          <template x-for="(name, code) in locales" :key="code">
+            <option :value="code" x-text="name"></option>
+          </template>
+        </select>
+      </div>
+
+      <button @click="login()"
+        class="w-full bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-lg py-3 text-sm flex items-center justify-center gap-2 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M13.958 10.09c0 1.232.029 2.256-.591 3.351-.502.891-1.301 1.438-2.186 1.438-1.214 0-1.922-.924-1.922-2.292 0-2.692 2.415-3.182 4.699-3.182v.685zm3.186 7.705c-.209.189-.512.201-.745.076-1.047-.872-1.234-1.276-1.814-2.106-1.734 1.767-2.962 2.297-5.209 2.297-2.66 0-4.731-1.641-4.731-4.925 0-2.565 1.391-4.309 3.37-5.164 1.715-.754 4.113-.891 5.942-1.099V6.41c0-.677.051-1.475-.344-2.06-.344-.521-.999-.736-1.576-.736-1.07 0-2.022.549-2.256 1.686-.047.254-.231.505-.484.517l-2.713-.293c-.228-.051-.481-.236-.416-.587C7.56 2.619 10.025 2 12.222 2c1.127 0 2.599.299 3.489 1.153 1.127 1.053 1.02 2.459 1.02 3.991v3.612c0 1.086.449 1.562.874 2.148.148.208.182.457-.009.616l-2.453 2.275h.001zM21.338 20.44c-4.059 2.737-9.952 4.189-15.014 4.189C2.691 24.629 0 22.76 0 20.27c0-.9.428-1.81 1.145-2.57.208-.225.455-.175.269.087-1.007 1.512-.578 3.374 2.019 4.417 2.598 1.044 5.913.924 8.509.175C15.051 21.26 18.039 19.5 20.188 17.68c.18-.152.358-.108.358.07 0 .278-.138.568-.208.69h1z"/>
+        </svg>
+        Mit Amazon anmelden
+      </button>
+      <p class="text-center text-xs text-zinc-600">2FA und CAPTCHA werden unterstützt</p>
+    </div>
+
+    <div x-show="loginLoading" class="bg-zinc-900 rounded-2xl p-8 border border-zinc-800 shadow-2xl text-center space-y-3">
+      <svg class="spin w-8 h-8 text-amber-500 mx-auto" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+      </svg>
+      <p class="font-medium text-zinc-200">Amazon-Login läuft…</p>
+      <p class="text-xs text-zinc-500">Melde dich im Popup-Fenster an.<br>Die App kehrt danach automatisch zurück.</p>
+      <button @click="loginLoading=false" class="text-xs text-zinc-600 hover:text-zinc-400 underline">Abbrechen</button>
+    </div>
+
+    <p class="text-center text-xs text-zinc-700 mt-4">Gespeichert in <code>~/.audible_tool/</code></p>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     HAUPTAPP
+══════════════════════════════════════════════════════════ -->
+<div x-show="isLoggedIn"
+     :style="`padding-bottom: ${(player.book ? 72 : 0) + (activeTasks.length ? 160 : 0) + 16}px`"
+     class="min-h-screen">
+
+  <!-- Header -->
+  <header class="sticky top-0 bg-zinc-950/90 backdrop-blur border-b border-zinc-800 z-40">
+    <div class="max-w-[1600px] mx-auto px-5 h-14 flex items-center gap-3">
+
+      <div class="flex items-center gap-2 shrink-0" aria-hidden="true">
+        <div class="w-7 h-7 bg-amber-500 rounded-lg flex items-center justify-center shrink-0">
+          <svg class="w-4 h-4 text-zinc-950" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 3C6.48 3 2 7.48 2 13c0 3.69 1.99 6.93 4.98 8.69L8 20.5V19c0-.55.45-1 1-1h6c.55 0 1 .45 1 1v1.5l1.02 1.19C19.01 19.93 21 16.69 21 13c0-5.52-4.48-10-9-10z"/>
+          </svg>
+        </div>
+        <span class="font-bold text-sm">Audible Downloader</span>
+      </div>
+
+      <!-- Suche -->
+      <div class="flex-1 max-w-md">
+        <label for="search-input" class="sr-only">Bibliothek durchsuchen</label>
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 115 11a6 6 0 0112 0z"/>
+          </svg>
+          <input id="search-input" x-model="filter" type="search" placeholder="Titel oder Autor…"
+            class="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-zinc-600">
+        </div>
+      </div>
+
+      <div class="hidden md:block text-xs text-zinc-600 shrink-0" aria-live="polite">
+        <span x-text="filteredBooks.length"></span> Titel
+      </div>
+
+      <div class="flex-1"></div>
+
+      <!-- Alle laden -->
+      <div x-show="books.length" class="relative shrink-0" x-data="{open:false}">
+        <button @click="open=!open"
+                :aria-expanded="open"
+                aria-haspopup="true"
+                class="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium text-xs rounded-lg px-3 py-1.5 transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Alle laden
+          <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div x-show="open" @click.outside="open=false" role="menu"
+          class="absolute right-0 top-full mt-1 w-44 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden fadein">
+          <button @click="downloadAll(null);open=false" role="menuitem" class="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-800 transition">Original behalten</button>
+          <button @click="downloadAll('m4b');open=false"  role="menuitem" class="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-800 transition">→ M4B konvertieren</button>
+          <button @click="downloadAll('mp3');open=false"  role="menuitem" class="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-800 transition">→ MP3 konvertieren</button>
+        </div>
+      </div>
+
+      <!-- User-Menü -->
+      <div class="relative shrink-0" x-data="{open:false}">
+        <button @click="open=!open"
+                :aria-expanded="open"
+                aria-haspopup="true"
+                :aria-label="'Konto: ' + (locale||'unbekannt') + '. Menü öffnen'"
+                class="flex items-center gap-1.5 hover:bg-zinc-900 rounded-lg px-2 py-1.5 transition focus-visible:ring-1 focus-visible:ring-amber-500">
+          <div class="w-6 h-6 bg-zinc-700 rounded-full flex items-center justify-center text-[10px] font-bold uppercase" x-text="locale||'?'" aria-hidden="true"></div>
+        </button>
+        <div x-show="open" @click.outside="open=false" role="menu"
+          class="absolute right-0 top-full mt-1 w-36 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl z-50 overflow-hidden fadein">
+          <div class="px-3 py-2 border-b border-zinc-800" aria-hidden="true">
+            <div class="text-[10px] text-zinc-500">Marktplatz</div>
+            <div class="text-xs font-medium uppercase" x-text="locale"></div>
+          </div>
+          <button @click="logout();open=false" role="menuitem" class="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-zinc-800 transition">Abmelden</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Laden -->
+  <div x-show="isLoading" class="flex flex-col items-center justify-center h-64 gap-3 text-zinc-500" role="status" aria-label="Bibliothek wird geladen">
+    <svg class="spin w-7 h-7 text-amber-500" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+    </svg>
+    <span class="text-sm">Bibliothek wird geladen…</span>
+  </div>
+
+  <!-- Fehler -->
+  <div x-show="libError && !isLoading" class="max-w-sm mx-auto mt-16 bg-red-950/40 border border-red-800 rounded-xl p-5 text-center" role="alert">
+    <p class="text-red-400 text-sm" x-text="libError"></p>
+    <button @click="loadLibrary()" class="mt-2 text-xs text-amber-500 hover:underline focus-visible:ring-1 focus-visible:ring-amber-500 rounded">Erneut versuchen</button>
+  </div>
+
+  <!-- Bücher-Raster -->
+  <main x-show="!isLoading && !libError" class="max-w-[1600px] mx-auto px-5 py-5">
+    <div class="grid gap-3" style="grid-template-columns:repeat(auto-fill,minmax(160px,1fr))">
+      <template x-for="book in filteredBooks" :key="book.asin">
+
+        <article class="bg-zinc-900 rounded-xl overflow-hidden card-hover border border-zinc-800/60 transition-colors"
+                 :class="player.book?.asin === book.asin ? 'border-amber-500/40' : ''"
+                 :aria-label="book.title + (book.author ? ', von ' + book.author : '')">
+
+          <!-- Cover mit Play-Button -->
+          <div class="aspect-square relative bg-zinc-800 overflow-hidden group">
+            <img x-show="book.cover" :src="book.cover" :alt="'Cover: ' + book.title" class="w-full h-full object-cover pointer-events-none" @error="book.cover=''">
+            <div x-show="!book.cover" class="cover-ph w-full h-full pointer-events-none" :style="'background:'+phColor(book.title)" :aria-label="book.title.charAt(0).toUpperCase()" aria-hidden="true"></div>
+
+            <span class="absolute top-1.5 right-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded backdrop-blur pointer-events-none"
+              aria-hidden="true"
+              :class="book.format==='AAXC' ? 'bg-violet-600/90 text-white' : 'bg-zinc-800/90 text-zinc-400'"
+              x-text="book.format"></span>
+
+            <!-- Play / Pause – volle Cover-Fläche als Button -->
+            <button
+              @click="playBook(book)"
+              :aria-label="player.book?.asin===book.asin && player.playing
+                ? 'Pause: ' + book.title
+                : 'Abspielen: ' + book.title + (book.author ? ' von ' + book.author : '')"
+              :aria-pressed="player.book?.asin===book.asin && player.playing"
+              class="absolute inset-0 w-full flex items-center justify-center transition
+                     group-hover:bg-black/50 focus-visible:bg-black/50
+                     focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-inset">
+              <span class="w-10 h-10 bg-amber-500 rounded-full flex items-center justify-center shadow-lg transition-opacity
+                           opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                    aria-hidden="true">
+                <!-- Ladeanimation -->
+                <svg x-show="player.book?.asin===book.asin && player.loading"
+                     class="spin w-4 h-4 text-zinc-950" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+                </svg>
+                <!-- Pause -->
+                <svg x-show="player.book?.asin===book.asin && player.playing && !player.loading"
+                     class="w-4 h-4 text-zinc-950" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                </svg>
+                <!-- Play -->
+                <svg x-show="!(player.book?.asin===book.asin && (player.playing || player.loading))"
+                     class="w-4 h-4 text-zinc-950 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+              </span>
+            </button>
+          </div>
+
+          <!-- Textbereich -->
+          <div class="p-2.5">
+            <!-- Titel-Button öffnet Detailansicht -->
+            <button @click="openDetail(book)"
+                    :aria-label="book.title + (book.author ? ', von ' + book.author : '') + (book.duration_min ? ', ' + fmtMin(book.duration_min) : '') + '. Titelinfos anzeigen'"
+                    class="text-left w-full rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-amber-500">
+              <span class="block text-xs font-semibold text-zinc-100 leading-snug line-clamp-2 mb-0.5 min-h-[2.5rem]" aria-hidden="true" x-text="book.title"></span>
+            </button>
+            <div class="text-[11px] text-zinc-500 truncate mb-1" aria-hidden="true" x-text="book.author||'—'"></div>
+            <div class="text-[10px] text-zinc-600 mb-2.5" aria-hidden="true" x-text="fmtMin(book.duration_min)"></div>
+
+            <!-- Status -->
+            <div x-show="!getTask(book.asin)">
+              <button @click="openModal(book)"
+                :aria-label="'Herunterladen: ' + book.title"
+                class="w-full bg-zinc-800 hover:bg-amber-500 hover:text-zinc-950 text-zinc-300 text-xs font-medium rounded-lg py-2 transition flex items-center justify-center gap-1 focus-visible:ring-1 focus-visible:ring-amber-500">
+                <svg class="w-3 h-3" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                Laden
+              </button>
+            </div>
+
+            <div x-show="getTask(book.asin) && !['done','error'].includes(getTask(book.asin).status)"
+                 role="progressbar"
+                 :aria-valuenow="getTask(book.asin)?.percent ?? 0"
+                 aria-valuemin="0" aria-valuemax="100"
+                 :aria-label="book.title + ': ' + (getTask(book.asin)?.message ?? '')">
+              <div class="h-1.5 bg-zinc-800 rounded-full overflow-hidden mb-1">
+                <div class="h-full bg-amber-500 rounded-full pbar"
+                  :style="'width:'+(getTask(book.asin)?.percent ?? 0)+'%'"></div>
+              </div>
+              <div class="text-[9px] text-zinc-500 truncate text-center" aria-hidden="true"
+                x-text="getTask(book.asin)?.message ?? ''"></div>
+            </div>
+
+            <div x-show="getTask(book.asin)?.status==='done'"
+              class="text-[11px] text-emerald-400 text-center py-1.5 flex items-center justify-center gap-1"
+              role="status" :aria-label="book.title + ': Download abgeschlossen'">
+              <svg class="w-3 h-3" aria-hidden="true" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z"/>
+              </svg>
+              <span aria-hidden="true">Fertig</span>
+            </div>
+
+            <button x-show="getTask(book.asin)?.status==='error'"
+              @click="openModal(book)"
+              :aria-label="book.title + ': Fehler – ' + (getTask(book.asin)?.message ?? '') + '. Erneut versuchen'"
+              class="w-full text-[11px] text-red-400 text-center py-1.5 hover:underline focus-visible:ring-1 focus-visible:ring-red-500 rounded">
+              <span aria-hidden="true">✗ Fehler – erneut versuchen</span>
+            </button>
+          </div>
+        </article>
+      </template>
+    </div>
+
+    <div x-show="!isLoading && filteredBooks.length===0 && books.length>0"
+      class="text-center text-zinc-600 py-20 text-sm" role="status">
+      Keine Treffer für „<span class="text-zinc-400" x-text="filter"></span>"
+    </div>
+  </main>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     DOWNLOAD-WARTESCHLANGE
+══════════════════════════════════════════════════════════ -->
+<div x-show="activeTasks.length > 0"
+     :style="`bottom:${player.book ? 72 : 0}px; z-index:50; transition:bottom 0.2s ease`"
+     class="fixed left-0 right-0 bg-zinc-900/96 backdrop-blur border-t border-zinc-800 shadow-2xl"
+     role="region" aria-label="Download-Warteschlange">
+  <div class="max-w-[1600px] mx-auto px-5 py-3">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-2 text-sm font-medium">
+        <svg class="spin w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+        </svg>
+        <span>Downloads</span>
+        <span class="bg-amber-500 text-zinc-950 text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+              x-text="activeTasks.length"
+              :aria-label="activeTasks.length + ' aktive Downloads'"></span>
+      </div>
+      <button @click="clearDone()" class="text-xs text-zinc-500 hover:text-zinc-300 transition focus-visible:ring-1 focus-visible:ring-amber-500 rounded">Abgeschlossene entfernen</button>
+    </div>
+    <ul class="space-y-1.5 max-h-28 overflow-y-auto list-none">
+      <template x-for="task in allTasks" :key="task.id">
+        <li class="flex items-center gap-3"
+            :aria-label="task.title + ': ' + task.message + ', ' + task.percent + ' Prozent'">
+          <div class="w-4 h-4 shrink-0 flex items-center justify-center" aria-hidden="true">
+            <svg x-show="!['done','error'].includes(task.status)" class="spin w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+            </svg>
+            <svg x-show="task.status==='done'" class="w-3.5 h-3.5 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M16.7 5.3a1 1 0 010 1.4l-8 8a1 1 0 01-1.4 0l-4-4a1 1 0 011.4-1.4L8 12.6l7.3-7.3a1 1 0 011.4 0z"/>
+            </svg>
+            <svg x-show="task.status==='error'" class="w-3.5 h-3.5 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.7 7.3a1 1 0 00-1.4 1.4L8.6 10l-1.3 1.3a1 1 0 001.4 1.4L10 11.4l1.3 1.3a1 1 0 001.4-1.4L11.4 10l1.3-1.3a1 1 0 00-1.4-1.4L10 8.6 8.7 7.3z"/>
+            </svg>
+          </div>
+          <div class="w-40 shrink-0 text-xs text-zinc-300 truncate" aria-hidden="true" x-text="task.title"></div>
+          <div class="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden" aria-hidden="true">
+            <div class="h-full rounded-full pbar"
+              :class="task.status==='done' ? 'bg-emerald-500' : task.status==='error' ? 'bg-red-600' : 'bg-amber-500'"
+              :style="'width:'+task.percent+'%'"></div>
+          </div>
+          <div class="w-9 text-right text-[10px] text-zinc-500 shrink-0" aria-hidden="true" x-text="task.percent+'%'"></div>
+          <div class="w-10 shrink-0 text-[10px] font-mono text-zinc-500" aria-hidden="true" x-text="task.format||''"></div>
+        </li>
+      </template>
+    </ul>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     PLAYER BAR
+══════════════════════════════════════════════════════════ -->
+<div x-show="player.book"
+     class="fixed bottom-0 left-0 right-0 bg-zinc-950/97 backdrop-blur-sm border-t border-zinc-800 shadow-2xl"
+     style="height:72px; z-index:60"
+     role="region"
+     aria-label="Audioplayer">
+
+  <div class="h-full max-w-[1600px] mx-auto px-4 flex items-center gap-4">
+
+    <!-- Jetzt läuft -->
+    <div class="flex items-center gap-3 w-52 shrink-0 min-w-0">
+      <div class="w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-zinc-800 flex items-center justify-center text-base font-bold text-zinc-400" aria-hidden="true">
+        <img x-show="player.book?.cover" :src="player.book?.cover" class="w-full h-full object-cover" :alt="player.book?.title" @error="$el.style.display='none'">
+        <span x-show="!player.book?.cover" x-text="player.book?.title?.charAt(0)||'?'"></span>
+      </div>
+      <div class="min-w-0">
+        <div class="text-[11px] font-semibold text-zinc-100 truncate" x-text="player.book?.title"></div>
+        <div class="text-[10px] text-zinc-500 truncate" x-text="player.book?.author"></div>
+      </div>
+    </div>
+
+    <!-- Controls + Seek -->
+    <div class="flex-1 flex flex-col justify-center gap-1">
+      <div class="flex items-center justify-center gap-3">
+
+        <!-- -30s -->
+        <button @click="seekRelative(-30)"
+                aria-label="30 Sekunden zurück"
+                class="text-[10px] font-semibold text-zinc-500 hover:text-zinc-200 transition w-8 h-6 flex items-center justify-center rounded focus-visible:ring-1 focus-visible:ring-amber-500">
+          <span aria-hidden="true">↺ 30</span>
+        </button>
+
+        <!-- Play / Pause -->
+        <button @click="togglePlay()"
+                :aria-label="player.playing ? 'Pause: ' + (player.book?.title||'') : 'Abspielen: ' + (player.book?.title||'')"
+                :aria-pressed="player.playing"
+                class="w-9 h-9 rounded-full flex items-center justify-center transition shrink-0 focus-visible:ring-2 focus-visible:ring-amber-300"
+                :class="player.loading ? 'bg-zinc-700 cursor-wait' : 'bg-amber-500 hover:bg-amber-400'">
+          <svg x-show="player.loading" class="spin w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z"/>
+          </svg>
+          <svg x-show="!player.loading && !player.playing" class="w-4 h-4 text-zinc-950 ml-0.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+          <svg x-show="!player.loading && player.playing" class="w-4 h-4 text-zinc-950" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+          </svg>
+        </button>
+
+        <!-- +30s -->
+        <button @click="seekRelative(30)"
+                aria-label="30 Sekunden vor"
+                class="text-[10px] font-semibold text-zinc-500 hover:text-zinc-200 transition w-8 h-6 flex items-center justify-center rounded focus-visible:ring-1 focus-visible:ring-amber-500">
+          <span aria-hidden="true">↻ 30</span>
+        </button>
+      </div>
+
+      <!-- Seek-Leiste: visuelle Leiste + unsichtbarer range-Input darüber -->
+      <div class="flex items-center gap-2">
+        <span class="text-[10px] text-zinc-600 w-10 text-right shrink-0" aria-hidden="true" x-text="fmtSec(player.currentTime)"></span>
+
+        <div class="relative flex-1 h-2 seek-wrap" style="cursor:pointer">
+          <!-- Visuelle Leiste -->
+          <div class="seek-track absolute inset-y-0 left-0 right-0 my-auto h-1 bg-zinc-700 rounded-full overflow-hidden" aria-hidden="true">
+            <div class="h-full bg-amber-500 rounded-full"
+                 :style="`width:${player.duration ? Math.min(100, player.currentTime/player.duration*100) : 0}%`">
+            </div>
+          </div>
+          <!-- Barrierefreier range-Input (unsichtbar, liegt über der Leiste) -->
+          <input type="range" class="seek-range"
+                 :min="0" :max="Math.floor(player.duration) || 100"
+                 :value="Math.floor(player.currentTime)"
+                 @input="onSeekInput($event.target.value)"
+                 :aria-label="'Wiedergabeposition: ' + fmtSec(player.currentTime) + ' von ' + fmtSec(player.duration)"
+                 :aria-valuetext="fmtSec(player.currentTime) + ' von ' + fmtSec(player.duration)">
+        </div>
+
+        <span class="text-[10px] text-zinc-600 w-10 shrink-0" aria-hidden="true" x-text="fmtSec(player.duration)"></span>
+      </div>
+
+      <div x-show="player.prepMsg && !player.error" class="text-[10px] text-amber-400 text-center" aria-live="polite" x-text="player.prepMsg"></div>
+      <div x-show="player.error" class="text-[10px] text-red-400 text-center flex items-center justify-center gap-2" role="alert">
+        <span x-text="player.error"></span>
+        <button @click="_testStream()" class="text-zinc-500 hover:text-zinc-300 underline text-[9px]">Test</button>
+      </div>
+    </div>
+
+    <!-- Geschwindigkeit + Lautstärke + Schließen -->
+    <div class="flex items-center gap-3 shrink-0">
+
+      <label class="sr-only" :for="'speed-select'">Wiedergabegeschwindigkeit</label>
+      <select id="speed-select"
+              x-model="player.speed"
+              @change="setSpeed($event.target.value)"
+              aria-label="Wiedergabegeschwindigkeit"
+              class="bg-zinc-900 border border-zinc-700 text-[11px] text-zinc-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-500">
+        <option value="0.75">0.75×</option>
+        <option value="1">1×</option>
+        <option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option>
+        <option value="2">2×</option>
+      </select>
+
+      <div class="flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5 text-zinc-500 shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+        </svg>
+        <input type="range" min="0" max="1" step="0.05"
+               :value="player.volume"
+               @input="setVolume($event.target.value)"
+               aria-label="Lautstärke"
+               :aria-valuetext="Math.round(player.volume * 100) + '%'"
+               class="w-16">
+      </div>
+
+      <button @click="closePlayer()"
+              aria-label="Player schließen"
+              class="text-zinc-600 hover:text-zinc-300 transition p-1 focus-visible:ring-1 focus-visible:ring-amber-500 rounded">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+        </svg>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     DETAIL-MODAL
+══════════════════════════════════════════════════════════ -->
+<template x-if="detail.show && detail.book">
+  <div class="modal-overlay"
+       @click.self="closeDetail()"
+       role="dialog"
+       aria-modal="true"
+       :aria-labelledby="'detail-heading'">
+    <div class="bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl w-full max-w-xl fadein overflow-hidden">
+
+      <!-- Cover-Header -->
+      <div class="relative h-44 bg-zinc-800 overflow-hidden">
+        <img x-show="detail.book.cover" :src="detail.book.cover" :alt="''" class="w-full h-full object-cover" style="filter:blur(8px) brightness(0.4); transform:scale(1.1)">
+        <div class="absolute inset-0 flex items-end p-5 gap-4">
+          <div class="w-24 h-24 rounded-xl overflow-hidden shrink-0 shadow-lg bg-zinc-700 flex items-center justify-center text-3xl font-bold text-zinc-400" aria-hidden="true">
+            <img x-show="detail.book.cover" :src="detail.book.cover" class="w-full h-full object-cover" @error="$el.style.display='none'">
+            <span x-show="!detail.book.cover" x-text="detail.book.title?.charAt(0)||'?'"></span>
+          </div>
+          <div class="min-w-0 pb-1">
+            <div class="text-xs text-amber-400 font-medium mb-0.5"
+                 x-show="detail.book.series_title"
+                 aria-hidden="true"
+                 x-text="detail.book.series_title + (detail.book.series_sequence ? ' · #' + detail.book.series_sequence : '')"></div>
+            <h2 id="detail-heading" class="font-bold text-base text-white leading-snug line-clamp-2" x-text="detail.book.title"></h2>
+            <div class="text-sm text-zinc-300 mt-0.5" x-text="detail.book.author"></div>
+          </div>
+        </div>
+        <!-- Schließen-Button bekommt initialen Fokus -->
+        <button @click="closeDetail()"
+                id="detail-close-btn"
+                data-focus-first
+                aria-label="Titelinfo schließen"
+                class="absolute top-3 right-3 w-7 h-7 rounded-full bg-black/50 hover:bg-black/70 flex items-center justify-center transition focus-visible:ring-2 focus-visible:ring-amber-500">
+          <svg class="w-3.5 h-3.5 text-white" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Metadaten -->
+      <div class="px-5 pt-4 pb-2 space-y-2">
+        <dl class="flex flex-wrap gap-3 text-xs">
+          <div x-show="detail.book.narrator">
+            <dt class="inline text-zinc-600">Gesprochen von </dt>
+            <dd class="inline text-zinc-400" x-text="detail.book.narrator"></dd>
+          </div>
+          <div x-show="detail.book.series_title">
+            <dt class="inline text-zinc-600">Serie </dt>
+            <dd class="inline text-amber-400/80" x-text="detail.book.series_title + (detail.book.series_sequence ? ' #' + detail.book.series_sequence : '')"></dd>
+          </div>
+          <div x-show="detail.book.duration_min">
+            <dt class="inline text-zinc-600">Laufzeit </dt>
+            <dd class="inline text-zinc-400" x-text="fmtMin(detail.book.duration_min)"></dd>
+          </div>
+          <div>
+            <dt class="inline text-zinc-600">Format </dt>
+            <dd class="inline" :class="detail.book.format==='AAXC' ? 'text-violet-400' : 'text-zinc-400'" x-text="detail.book.format"></dd>
+          </div>
+        </dl>
+
+        <!-- Beschreibung -->
+        <div x-show="detail.book.description">
+          <h3 class="sr-only">Beschreibung</h3>
+          <div class="text-xs text-zinc-400 leading-relaxed max-h-36 overflow-y-auto"
+               x-html="detail.book.description">
+          </div>
+        </div>
+      </div>
+
+      <!-- Aktions-Buttons -->
+      <div class="flex gap-2 px-5 pb-5 pt-2">
+        <button @click="playBook(detail.book); closeDetail()"
+          :aria-label="'Abspielen: ' + detail.book.title"
+          class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-xl py-2.5 text-sm flex items-center justify-center gap-2 transition focus-visible:ring-2 focus-visible:ring-amber-300">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          Abspielen
+        </button>
+        <button @click="openModal(detail.book); closeDetail()"
+          :aria-label="'Herunterladen: ' + detail.book.title"
+          class="flex-1 border border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-200 rounded-xl py-2.5 text-sm flex items-center justify-center gap-2 transition focus-visible:ring-1 focus-visible:ring-amber-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+          </svg>
+          Herunterladen
+        </button>
+      </div>
+
+    </div>
+  </div>
+</template>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     DOWNLOAD-MODAL
+══════════════════════════════════════════════════════════ -->
+<template x-if="modal.show && modal.book">
+  <div class="modal-overlay" @click.self="closeModal()"
+    role="dialog" aria-modal="true"
+    :aria-labelledby="'dl-modal-heading'">
+    <div class="bg-zinc-900 rounded-2xl border border-zinc-800 shadow-2xl w-full max-w-md fadein">
+      <div class="p-6 space-y-5">
+
+        <div class="flex gap-4 items-center">
+          <div class="w-14 h-14 rounded-lg overflow-hidden shrink-0 flex items-center justify-center text-2xl font-bold"
+            :style="'background:'+phColor(modal.book.title)"
+            aria-hidden="true"
+            x-text="modal.book.title ? modal.book.title.charAt(0).toUpperCase() : '?'">
+          </div>
+          <div class="min-w-0">
+            <h2 id="dl-modal-heading" class="font-semibold text-sm text-zinc-100 line-clamp-2" tabindex="-1" data-modal-focus x-text="modal.book.title"></h2>
+            <div class="text-xs text-zinc-500 mt-0.5" x-text="modal.book.author"></div>
+            <div class="text-xs text-zinc-600 mt-0.5" x-text="fmtMin(modal.book.duration_min)"></div>
+          </div>
+        </div>
+
+        <fieldset>
+          <legend class="text-xs font-medium text-zinc-400 mb-2">Zielformat</legend>
+          <div class="grid grid-cols-2 gap-2">
+            <template x-for="f in formatOptions" :key="f.value ?? 'orig'">
+              <button @click="modal.format=f.value"
+                :aria-pressed="modal.format===f.value"
+                :class="modal.format===f.value
+                  ? 'border-amber-500 bg-amber-500/10 text-amber-400'
+                  : 'border-zinc-700 text-zinc-400 hover:border-zinc-600'"
+                class="border rounded-xl px-3 py-2.5 text-left transition focus-visible:ring-1 focus-visible:ring-amber-500">
+                <div class="font-semibold text-sm" x-text="f.label"></div>
+                <div class="text-[10px] mt-0.5 opacity-60" x-text="f.desc"></div>
+              </button>
+            </template>
+          </div>
+        </fieldset>
+
+        <div x-show="modal.format && modal.format !== null">
+          <label class="flex items-center gap-3 cursor-pointer select-none">
+            <div class="relative">
+              <input type="checkbox" class="sr-only" x-model="modal.multitrack"
+                id="mt-toggle"
+                :aria-label="'Kapitel einzeln speichern: ' + (modal.multitrack ? 'aktiviert' : 'deaktiviert')">
+              <div class="w-9 h-5 rounded-full transition"
+                :class="modal.multitrack ? 'bg-amber-500' : 'bg-zinc-700'"></div>
+              <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform"
+                :class="modal.multitrack ? 'translate-x-4' : 'translate-x-0'"></div>
+            </div>
+            <div>
+              <div class="text-xs font-medium text-zinc-300">Kapitel einzeln speichern</div>
+              <div class="text-[10px] text-zinc-500">Jedes Kapitel als eigene Datei</div>
+            </div>
+          </label>
+        </div>
+
+        <div>
+          <label for="dl-dir-input" class="text-xs font-medium text-zinc-400 block mb-2">Speicherort</label>
+          <div class="flex gap-2">
+            <input id="dl-dir-input" x-model="downloadDir" type="text"
+              placeholder="Standard: ~/Downloads/Audible"
+              class="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-amber-500 placeholder-zinc-600">
+            <button @click="pickFolder()"
+              aria-label="Ordner auswählen"
+              class="shrink-0 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-zinc-300 transition flex items-center gap-1 focus-visible:ring-1 focus-visible:ring-amber-500">
+              <svg class="w-3.5 h-3.5" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+              </svg>
+              Ordner
+            </button>
+          </div>
+        </div>
+
+        <div class="flex gap-2 pt-1">
+          <button @click="closeModal()"
+            class="flex-1 border border-zinc-700 hover:border-zinc-600 text-zinc-400 rounded-xl py-2.5 text-sm transition focus-visible:ring-1 focus-visible:ring-amber-500">
+            Abbrechen
+          </button>
+          <button @click="startDownload()"
+            :aria-label="'Herunterladen: ' + modal.book.title"
+            class="flex-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-semibold rounded-xl py-2.5 text-sm transition flex items-center justify-center gap-1.5 focus-visible:ring-2 focus-visible:ring-amber-300">
+            <svg class="w-4 h-4" aria-hidden="true" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Herunterladen
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</template>
+
+
+<!-- Verstecktes Audio-Element -->
+<audio x-ref="audio" class="sr-only" preload="none"
+       :aria-label="player.book ? 'Hörbuch: ' + player.book.title : 'Audioplayer'"
+       role="application"></audio>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     ALPINE.JS KOMPONENTE
+══════════════════════════════════════════════════════════ -->
+<script>
+const PH_COLORS = ['#7c3aed','#1d4ed8','#15803d','#b45309','#be185d','#0f766e','#9a3412','#1e40af'];
+
+function app() {
+  return {
+    // Auth
+    isLoggedIn: false,
+    locale: null,
+    locales: {},
+    loginForm: { locale: 'de' },
+    loginLoading: false,
+    loginError: null,
+
+    // Bibliothek
+    isLoading: false,
+    libError: null,
+    books: [],
+    filter: '',
+
+    // Downloads
+    tasks: {},
+    downloadDir: '',
+
+    // Download-Modal
+    modal: { show: false, book: null, format: 'm4b', multitrack: false },
+
+    // Detail-Modal
+    detail: { show: false, book: null },
+
+    // Player
+    player: {
+      book: null,
+      playing: false,
+      loading: false,
+      error: null,
+      prepMsg: '',
+      currentTime: 0,
+      duration: 0,
+      volume: 1.0,
+      speed: 1,
+      startOffset: 0,
+    },
+
+    // Accessibility
+    announcement: '',
+    _lastFocus: null,
+    _rangeActive: false,
+    _seekTimer: null,
+    _useNativePlay: false,
+
+    formatOptions: [
+      { value: 'm4b',  label: 'M4B',      desc: 'Hörbuch mit Kapiteln' },
+      { value: 'm4a',  label: 'M4A',      desc: 'MPEG-4 Audio' },
+      { value: 'mp3',  label: 'MP3',      desc: 'Maximale Kompatibilität' },
+      { value: 'flac', label: 'FLAC',     desc: 'Verlustfrei, groß' },
+      { value: 'ogg',  label: 'OGG',      desc: 'Vorbis, Open Source' },
+      { value: 'opus', label: 'OPUS',     desc: 'Klein & qualitätsstark' },
+      { value: null,   label: 'Original', desc: 'AAX / AAXC behalten' },
+    ],
+
+    get filteredBooks() {
+      if (!this.filter) return this.books;
+      const q = this.filter.toLowerCase();
+      return this.books.filter(b =>
+        b.title.toLowerCase().includes(q) ||
+        (b.author||'').toLowerCase().includes(q)
+      );
+    },
+
+    get allTasks() {
+      return Object.values(this.tasks).slice().reverse();
+    },
+
+    get activeTasks() {
+      return Object.values(this.tasks).filter(t => !['done','error'].includes(t.status));
+    },
+
+    // ── Init ────────────────────────────────────────────
+    async init() {
+      try {
+        const r = await fetch('/api/status').then(r => r.json());
+        this.locales = r.locales || {};
+        if (r.logged_in) {
+          this.isLoggedIn = true;
+          this.locale = r.locale;
+          await this.loadLibrary();
+        }
+      } catch(e) {}
+
+      this.$nextTick(() => this._setupAudioListeners());
+
+      document.addEventListener('keydown', e => {
+        if (e.target.matches('input,textarea,select')) return;
+        if (e.key === ' ' && this.player.book) { e.preventDefault(); this.togglePlay(); }
+        if (e.key === 'ArrowLeft' && this.player.book && !this.detail.show && !this.modal.show) {
+          e.preventDefault(); this.seekRelative(-30);
+        }
+        if (e.key === 'ArrowRight' && this.player.book && !this.detail.show && !this.modal.show) {
+          e.preventDefault(); this.seekRelative(30);
+        }
+        if (e.key === 'Escape') {
+          if (this.detail.show) this.closeDetail();
+          else if (this.modal.show) this.closeModal();
+        }
+      });
+    },
+
+    // ── Auth ────────────────────────────────────────────
+    async login() {
+      this.loginLoading = true;
+      this.loginError = null;
+      try {
+        const r = await fetch('/api/login', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ locale: this.loginForm.locale }),
+        }).then(r => r.json());
+        if (r.success) {
+          this.isLoggedIn = true;
+          this.locale = this.loginForm.locale;
+          await this.loadLibrary();
+        } else {
+          this.loginError = r.error || 'Anmeldung fehlgeschlagen.';
+        }
+      } catch(e) {
+        this.loginError = 'Verbindungsfehler: ' + e.message;
+      }
+      this.loginLoading = false;
+    },
+
+    async logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      this.isLoggedIn = false;
+      this.books = [];
+      this.tasks = {};
+      this.closePlayer();
+    },
+
+    // ── Bibliothek ──────────────────────────────────────
+    async loadLibrary() {
+      this.isLoading = true;
+      this.libError = null;
+      try {
+        const r = await fetch('/api/library').then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        this.books = r.books || [];
+      } catch(e) {
+        this.libError = 'Fehler: ' + e.message;
+      }
+      this.isLoading = false;
+    },
+
+    // ── Detail-Modal ─────────────────────────────────────
+    openDetail(book) {
+      this._lastFocus = document.activeElement;
+      this.detail.book = book;
+      this.detail.show = true;
+      this.$nextTick(() => {
+        document.querySelector('[data-focus-first]')?.focus();
+      });
+    },
+
+    closeDetail() {
+      this.detail.show = false;
+      this.$nextTick(() => { this._lastFocus?.focus(); });
+    },
+
+    // ── Player ───────────────────────────────────────────
+    playBook(book) {
+      if (this.player.book?.asin === book.asin) {
+        this.togglePlay();
+        return;
+      }
+      // Alten Zustand aufräumen
+      this._stopStream();
+      if (this._prefetchAbort) { this._prefetchAbort.abort(); this._prefetchAbort = null; }
+      this._nextBlob = null;
+      this._streamAsin = null;
+      if (this._blobUrl) { URL.revokeObjectURL(this._blobUrl); this._blobUrl = null; }
+      const audio = this.$refs.audio;
+      if (audio) { audio.onended = null; audio.pause(); audio.src = ''; }
+
+      this.player.book = book;
+      this.player.duration = (book.duration_min || 0) * 60;
+      this.player.error = null;
+      this.player.currentTime = 0;
+      this.player.startOffset = 0;
+      this.player.loading = true;
+      this.player.playing = false;
+      this.player.prepMsg = 'Vorbereitung…';
+      this._announce('Wird abgespielt: ' + book.title + (book.author ? ' von ' + book.author : ''));
+
+      if (book.local) {
+        // Lokal: native HTML5-Audio mit HTTP-Range → sofortiges Spulen, kein Chunk-Overhead
+        this._useNativePlay = true;
+        if (audio) {
+          audio.src = '/api/play/' + book.asin;
+          audio.playbackRate = parseFloat(this.player.speed);
+          audio.volume = parseFloat(this.player.volume);
+          audio.play()
+            .then(() => { this.player.loading = false; this.player.playing = true; this.player.prepMsg = ''; })
+            .catch(e => { this.player.loading = false; this.player.prepMsg = ''; this.player.error = e.name + ': ' + e.message; });
+        }
+      } else {
+        // Online: Chunk-basiertes Streaming
+        this._useNativePlay = false;
+        this._startStream(0);
+      }
+    },
+
+    _testStream() {
+      // Spielt 5s 440Hz Sinuston via MSE – zur Diagnose ob MSE+fMP4 grundsätzlich klappt
+      const audio = this.$refs.audio;
+      if (!audio) return;
+      audio.pause();
+      this._stopStream();
+      audio.src = '';
+      this.player.error = null;
+      this.player.loading = true;
+      const ms = new MediaSource();
+      this._mseSource = ms;
+      const objUrl = URL.createObjectURL(ms);
+      this._mseObjectUrl = objUrl;
+      audio.src = objUrl;
+      const self = this;
+      ms.addEventListener('sourceopen', async () => {
+        try { ms.duration = Infinity; } catch(e) {}
+        let sb;
+        try { sb = ms.addSourceBuffer('audio/mp4; codecs="mp4a.40.2"'); }
+        catch(e) { self.player.error = 'MSE-Test Codec-Fehler: ' + e.message; self.player.loading = false; return; }
+        audio.play()
+          .then(() => { self.player.playing = true; self.player.loading = false; })
+          .catch(e => { self.player.loading = false; self.player.error = 'MSE-Test Play-Fehler: ' + e.name; });
+        try {
+          const resp = await fetch('/api/stream/test');
+          const reader = resp.body.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) { try { if (ms.readyState==='open') ms.endOfStream(); } catch(e){} break; }
+            if (ms.readyState !== 'open') break;
+            await new Promise((ok, fail) => {
+              sb.addEventListener('updateend', ok, { once: true });
+              sb.addEventListener('error', fail, { once: true });
+              try { sb.appendBuffer(value); } catch(e) { fail(e); }
+            });
+          }
+        } catch(e) {
+          if (e.name !== 'AbortError') { self.player.error = 'MSE-Test Fehler: ' + e.message; self.player.loading = false; }
+        }
+      });
+    },
+
+    _stopStream() {
+      if (this._streamAbort) { this._streamAbort.abort(); this._streamAbort = null; }
+      this._streamAsin = null;
+    },
+
+    async _prefetchBlob(asin, offset, duration, signal) {
+      try {
+        const url = '/api/stream/' + asin + '?start=' + offset + '&duration=' + duration;
+        const resp = await fetch(url, { signal });
+        if (!resp.ok) return;
+        const blob = await resp.blob();
+        // Nur Buch-Check, kein signal.aborted – Chunk-Wechsel darf Download nicht verwerfen
+        if (this._streamAsin === asin && blob.size > 0) {
+          this._nextBlob = { blob, offset, asin };
+          this._jsLog('prefetch OK offset=' + offset + ' size=' + blob.size);
+        }
+      } catch(e) { /* ignorieren */ }
+    },
+
+    _jsLog(msg) {
+      fetch('/api/js-log', { method: 'POST', body: msg }).catch(() => {});
+    },
+
+    _startStream(offset) {
+      const audio = this.$refs.audio;
+      if (!audio || !this.player.book) return;
+      const asin = this.player.book.asin;
+      const CHUNK = 60;
+      const nextOffset = Math.floor(offset) + CHUNK;
+      const maxDur = this.player.duration || Infinity;
+
+      // Alten Handler sofort löschen – verhindert dass WKWebView ihn nochmals feuert
+      audio.onended = null;
+      audio.pause();
+      this._stopStream();
+      if (this._blobUrl) { URL.revokeObjectURL(this._blobUrl); this._blobUrl = null; }
+
+      this.player.loading = true;
+      this.player.playing = false;
+      this.player.error = null;
+      this.player.prepMsg = 'Lade Audio…';
+      this.player.startOffset = offset;
+      this.player.currentTime = offset;
+
+      this._streamAsin = asin;
+      this._jsLog('startStream asin=' + asin + ' offset=' + Math.floor(offset));
+
+      const abortCtrl = new AbortController();
+      this._streamAbort = abortCtrl;
+      const self = this;
+
+      // Prefetch SOFORT starten (parallel zum aktuellen Fetch) – eliminiert Lücken
+      if (nextOffset < maxDur) {
+        const alreadyCached = self._nextBlob?.asin === asin && self._nextBlob?.offset === nextOffset;
+        if (!alreadyCached) {
+          if (self._prefetchAbort) { self._prefetchAbort.abort(); }
+          self._prefetchAbort = new AbortController();
+          self._prefetchBlob(asin, nextOffset, CHUNK, self._prefetchAbort.signal);
+        }
+      }
+
+      (async () => {
+        try {
+          const url = '/api/stream/' + asin
+            + '?start=' + Math.floor(offset)
+            + '&duration=' + CHUNK;
+
+          let blob;
+          const cached = self._nextBlob;
+          if (cached && cached.asin === asin && cached.offset === Math.floor(offset)) {
+            blob = cached.blob;
+            self._nextBlob = null;
+            self._jsLog('cache-hit offset=' + Math.floor(offset) + ' size=' + blob.size);
+          } else {
+            self._jsLog('fetch ' + url);
+            const resp = await fetch(url, { signal: abortCtrl.signal });
+            self._jsLog('fetch status=' + resp.status);
+            if (!resp.ok) {
+              self.player.error = 'Server-Fehler ' + resp.status;
+              self.player.loading = false;
+              self.player.prepMsg = '';
+              return;
+            }
+            blob = await resp.blob();
+            self._jsLog('blob size=' + blob.size);
+            if (blob.size === 0) {
+              self._streamAsin = null;
+              self.player.error = 'Stream-Fehler – bitte erneut Abspielen drücken';
+              self.player.loading = false;
+              self.player.prepMsg = '';
+              return;
+            }
+          }
+
+          if (abortCtrl.signal.aborted) return;
+
+          if (self._blobUrl) { URL.revokeObjectURL(self._blobUrl); }
+          const blobUrl = URL.createObjectURL(new Blob([blob], { type: 'audio/mp4' }));
+          self._blobUrl = blobUrl;
+          self._chunkOffset = offset;
+
+          audio.src = blobUrl;
+          audio.playbackRate = parseFloat(self.player.speed);
+          audio.volume = parseFloat(self.player.volume);
+          self.player.prepMsg = '';
+
+          audio.play()
+            .then(() => { self._jsLog('play() OK'); self.player.playing = true; self.player.loading = false; })
+            .catch(e => { self._jsLog('play() Fehler: ' + e.name + ' ' + e.message); self.player.loading = false; self.player.error = e.name + ': ' + e.message; });
+
+          audio.onended = () => {
+            if (self._streamAsin !== asin) return;
+            self._jsLog('Chunk Ende, weiter ab ' + nextOffset + 's');
+            if (nextOffset < maxDur) {
+              self._startStream(nextOffset);
+            } else {
+              self._streamAsin = null;
+              self.player.playing = false;
+              self.player.currentTime = self.player.duration;
+              self._announce('Wiedergabe beendet: ' + (self.player.book?.title || ''));
+            }
+          };
+
+        } catch(e) {
+          if (e.name !== 'AbortError') {
+            self._jsLog('Fehler: ' + e.name + ' ' + e.message);
+            self.player.error = e.name + ': ' + e.message;
+            self.player.loading = false;
+            self.player.prepMsg = '';
+          }
+        }
+      })();
+    },
+
+    togglePlay() {
+      const audio = this.$refs.audio;
+      if (!audio || !this.player.book) return;
+      if (this.player.playing) {
+        audio.pause();
+        this.player.playing = false;
+        this._announce('Pause');
+      } else if (this._useNativePlay) {
+        audio.play()
+          .then(() => { this.player.playing = true; this._announce('Wiedergabe'); })
+          .catch(e => { this.player.error = e.name + ': ' + e.message; });
+      } else {
+        if (!this._streamAsin && this.player.book) {
+          this.player.error = null;
+          this._startStream(this.player.currentTime);
+        } else {
+          audio.play().then(() => { this.player.playing = true; this._announce('Wiedergabe'); }).catch(() => {});
+        }
+      }
+    },
+
+    seekTo(t) {
+      const clamped = Math.max(0, Math.min(t, this.player.duration || Infinity));
+      const audio = this.$refs.audio;
+      this.player.currentTime = clamped;
+      if (this._useNativePlay) {
+        // Native: audio.currentTime direkt setzen — Browser handled Range-Request
+        if (audio) audio.currentTime = clamped;
+        return;
+      }
+      // Chunk-Streaming: innerhalb des laufenden Chunks direkt spulen
+      if (this._blobUrl && this._streamAsin && this._chunkOffset !== undefined) {
+        const CHUNK = 60;
+        if (clamped >= this._chunkOffset && clamped < this._chunkOffset + CHUNK) {
+          if (audio) audio.currentTime = clamped - this._chunkOffset;
+          return;
+        }
+      }
+      if (this.player.book) this._startStream(clamped);
+    },
+
+    seekRelative(delta) {
+      this.seekTo(this.player.currentTime + delta);
+    },
+
+    onSeekInput(val) {
+      const t = parseFloat(val);
+      this._rangeActive = true;
+      this.player.currentTime = t;
+      const audio = this.$refs.audio;
+      if (this._useNativePlay) {
+        if (audio) audio.currentTime = t;
+      } else if (this._blobUrl && this._streamAsin && this._chunkOffset !== undefined) {
+        const CHUNK = 60;
+        if (t >= this._chunkOffset && t < this._chunkOffset + CHUNK) {
+          if (audio) audio.currentTime = t - this._chunkOffset;
+        }
+      }
+      clearTimeout(this._seekTimer);
+      this._seekTimer = setTimeout(() => {
+        this._rangeActive = false;
+        this.seekTo(t);
+      }, 400);
+    },
+
+    setSpeed(s) {
+      this.player.speed = parseFloat(s);
+      const audio = this.$refs.audio;
+      if (audio) audio.playbackRate = this.player.speed;
+    },
+
+    setVolume(v) {
+      this.player.volume = parseFloat(v);
+      const audio = this.$refs.audio;
+      if (audio) audio.volume = this.player.volume;
+    },
+
+    closePlayer() {
+      const audio = this.$refs.audio;
+      if (audio) { audio.onended = null; audio.pause(); }
+      this._stopStream();
+      this._streamAsin = null;
+      this._useNativePlay = false;
+      if (this._prefetchAbort) { this._prefetchAbort.abort(); this._prefetchAbort = null; }
+      this._nextBlob = null;
+      if (this._blobUrl) { URL.revokeObjectURL(this._blobUrl); this._blobUrl = null; }
+      if (audio) { audio.src = ''; }
+      this.player.book = null;
+      this.player.playing = false;
+      this.player.loading = false;
+      this.player.currentTime = 0;
+      this.player.startOffset = 0;
+      this.player.error = null;
+      this.player.prepMsg = '';
+    },
+
+    _setupAudioListeners() {
+      const audio = this.$refs.audio;
+      if (!audio) return;
+      audio.addEventListener('timeupdate', () => {
+        if (!this._rangeActive) {
+          this.player.currentTime = this._useNativePlay
+            ? audio.currentTime
+            : this.player.startOffset + audio.currentTime;
+        }
+      });
+      audio.addEventListener('ended', () => {
+        if (this._streamAsin) return;
+        this.player.playing = false;
+        this.player.currentTime = this.player.duration;
+        this._announce('Wiedergabe beendet: ' + (this.player.book?.title || ''));
+      });
+      audio.addEventListener('canplay', () => {
+        if (this._useNativePlay && this.player.loading) {
+          this.player.loading = false;
+          this.player.prepMsg = '';
+        }
+      });
+      audio.addEventListener('waiting', () => { this.player.loading = true; });
+      audio.addEventListener('playing', () => { this.player.loading = false; this.player.playing = true; });
+      audio.addEventListener('pause',   () => { this.player.playing = false; });
+      audio.addEventListener('error', () => {
+        if (this.player.loading) return; // Während Chunk-Wechsel = erwartet, ignorieren
+        this.player.loading = false;
+        this.player.playing = false;
+        if (!this.player.error) {
+          const e = audio.error;
+          const msgs = {1:'Wiedergabe abgebrochen', 2:'Netzwerkfehler beim Streamen', 3:'Audio-Dekodierfehler', 4:'Format nicht unterstützt'};
+          this.player.error = (e && msgs[e.code]) || 'Stream-Fehler';
+        }
+      });
+    },
+
+    // ── Download-Modal ───────────────────────────────────
+    openModal(book) {
+      this._lastFocus = document.activeElement;
+      this.modal.book = book;
+      this.modal.format = 'm4b';
+      this.modal.multitrack = false;
+      this.modal.show = true;
+      this.$nextTick(() => {
+        document.querySelector('[data-modal-focus]')?.focus();
+      });
+    },
+
+    closeModal() {
+      this.modal.show = false;
+      this.$nextTick(() => { this._lastFocus?.focus(); });
+    },
+
+    async pickFolder() {
+      try {
+        if (window.pywebview && window.pywebview.api) {
+          const f = await window.pywebview.api.pick_folder();
+          if (f) this.downloadDir = f;
+        }
+      } catch(e) {}
+    },
+
+    async startDownload() {
+      const book       = this.modal.book;
+      const format     = this.modal.format;
+      const multitrack = this.modal.multitrack && !!format;
+      if (!book) return;
+      this.closeModal();
+      try {
+        const r = await fetch('/api/download', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ asin: book.asin, title: book.title, format, multitrack, output_dir: this.downloadDir || null }),
+        }).then(r => r.json());
+        if (r.task_id) {
+          this.tasks[r.task_id] = r.task;
+          this._subscribeSSE(r.task_id);
+          this._announce('Download gestartet: ' + book.title);
+        } else if (r.error) {
+          alert('Download konnte nicht gestartet werden: ' + r.error);
+        }
+      } catch(e) {
+        alert('Verbindungsfehler beim Download-Start.');
+      }
+    },
+
+    async downloadAll(format) {
+      try {
+        const r = await fetch('/api/download-all', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ format, output_dir: this.downloadDir || null }),
+        }).then(r => r.json());
+        if (r.error) alert('Fehler: ' + r.error);
+        else this._pollTasks();
+      } catch(e) {
+        alert('Verbindungsfehler.');
+      }
+    },
+
+    _subscribeSSE(taskId) {
+      const es = new EventSource('/api/events/' + taskId);
+      es.onmessage = e => {
+        const u = JSON.parse(e.data);
+        this.tasks = Object.assign({}, this.tasks, { [taskId]: u });
+        if (u.status === 'done') this._announce('Download abgeschlossen: ' + u.title);
+        if (u.status === 'done' || u.status === 'error') es.close();
+      };
+      es.onerror = () => es.close();
+    },
+
+    async _pollTasks() {
+      const poll = async () => {
+        try {
+          const ts = await fetch('/api/tasks').then(r => r.json());
+          let changed = false;
+          for (const t of ts) {
+            if (!this.tasks[t.id]) { this.tasks[t.id] = t; this._subscribeSSE(t.id); changed = true; }
+          }
+          if (changed) this.tasks = Object.assign({}, this.tasks);
+          if (ts.some(t => !['done','error'].includes(t.status))) setTimeout(poll, 1500);
+        } catch(e) {}
+      };
+      setTimeout(poll, 600);
+    },
+
+    clearDone() {
+      const next = {};
+      for (const [id, t] of Object.entries(this.tasks)) {
+        if (t.status !== 'done') next[id] = t;
+      }
+      this.tasks = next;
+    },
+
+    getTask(asin) {
+      return Object.values(this.tasks).find(t => t.asin === asin);
+    },
+
+    // ── Hilfsfunktionen ─────────────────────────────────
+    _announce(msg) {
+      this.announcement = '';
+      this.$nextTick(() => {
+        this.announcement = msg;
+        setTimeout(() => { this.announcement = ''; }, 4000);
+      });
+    },
+
+    fmtMin(min) {
+      if (!min) return '—';
+      const h = Math.floor(min/60), m = min%60;
+      return h ? h+'h '+m+'m' : m+'m';
+    },
+
+    fmtSec(s) {
+      const sec = Math.floor(s || 0);
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const ss = sec % 60;
+      if (h > 0) return h + ':' + String(m).padStart(2,'0') + ':' + String(ss).padStart(2,'0');
+      return m + ':' + String(ss).padStart(2,'0');
+    },
+
+    phColor(title) {
+      return PH_COLORS[(title||'A').charCodeAt(0) % PH_COLORS.length];
+    },
+  };
+}
+</script>
+</body>
+</html>
