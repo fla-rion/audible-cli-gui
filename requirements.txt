@@ -10,3 +10,4 @@ pyinstaller>=6.0.0
 # Plattformspezifisch für native Fenster-Backends
 pythonnet>=3.0.0; sys_platform == "win32"
 PySide6>=6.5.0; sys_platform == "linux"
+qtpy>=2.4.0; sys_platform == "linux"

@@ -66,16 +66,23 @@ jobs:
       - name: Smoke-Test (App startet, Flask antwortet)
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "dist/Audible Downloader/Audible Downloader.exe" -PassThru
+          $proc = Start-Process -FilePath "dist/Audible Downloader/Audible Downloader.exe" -PassThru `
+            -RedirectStandardOutput "app-stdout.log" -RedirectStandardError "app-stderr.log"
           $ok = $false
           for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 1
+            if ($proc.HasExited) { break }
             try {
               $resp = Invoke-WebRequest -Uri "http://127.0.0.1:7842" -UseBasicParsing -TimeoutSec 2
               if ($resp.StatusCode -eq 200) { $ok = $true; break }
             } catch {}
           }
+          if ($proc.HasExited) {
+            Write-Host "Prozess ist vorzeitig beendet (Exit-Code $($proc.ExitCode))"
+          }
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          Write-Host "--- stdout ---"; Get-Content "app-stdout.log" -ErrorAction SilentlyContinue
+          Write-Host "--- stderr ---"; Get-Content "app-stderr.log" -ErrorAction SilentlyContinue
           if (-not $ok) {
             Write-Error "App hat nicht innerhalb von 30s auf Port 7842 geantwortet"
             exit 1
@@ -126,8 +133,10 @@ jobs:
           --add-binary "ffmpeg-bin/ffmpeg:."
           --add-binary "ffmpeg-bin/ffprobe:."
           --collect-all PySide6
+          --collect-all qtpy
           --hidden-import webview
           --hidden-import webview.platforms.qt
+          --hidden-import qtpy.QtWebEngineWidgets
           --hidden-import jinja2
           --hidden-import jinja2.ext
           --hidden-import flask
