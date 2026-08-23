@@ -228,7 +228,10 @@ def main():
         js_api=AudibleAPI(),
     )
 
-    webview.start(_load_when_ready, _main_window, private_mode=False)
+    # Linux-Bundles bringen PySide6/QtWebEngine mit (self-contained), statt sich
+    # auf System-GTK/WebKit2GTK zu verlassen, das PyInstaller nicht bündeln kann.
+    gui = "qt" if sys.platform.startswith("linux") else None
+    webview.start(_load_when_ready, _main_window, private_mode=False, gui=gui)
 
 
 if __name__ == "__main__":
