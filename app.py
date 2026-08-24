@@ -25,6 +25,7 @@ from downloader import get_activation_bytes
 from converter import convert_file, split_to_chapters
 
 # Logging in Datei und Konsole
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',

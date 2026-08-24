@@ -21,7 +21,7 @@ A local app to download and convert your Audible audiobooks (German marketplace)
 - An Audible account (German marketplace, `audible.de`)
 - **macOS:** 12 or later (Apple Silicon or Intel) + [ffmpeg](https://ffmpeg.org/) (`brew install ffmpeg`)
 - **Windows:** 10 (21H2+) or 11 — [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) is required and ships pre-installed on current Windows; ffmpeg is bundled, nothing extra to install
-- **Linux:** x86_64, any distro with a desktop session (X11 or XWayland) — everything else (Qt/WebEngine, ffmpeg) is bundled, no system packages required
+- **Linux:** x86_64, any distro with a desktop session (X11 or XWayland). Qt/WebEngine and ffmpeg are bundled; the only system libraries expected to already be present are the standard X11/XCB libs every desktop environment ships with (`libxcb-cursor0` and friends) — if your distro is unusually minimal, `sudo apt install libxcb-cursor0` (or the distro equivalent)
 
 ## Installation
 
