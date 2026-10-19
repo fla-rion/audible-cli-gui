@@ -25,14 +25,27 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _get_aax_url(client: audible.Client, asin: str) -> Optional[str]:
-    """Holt die Download-URL für standard AAX-Inhalte (gekaufte Bücher)."""
+    """Holt die Download-URL für standard AAX-Inhalte (gekaufte Bücher).
+
+    Der Endpunkt ist POST 1.0/content/{asin}/licenserequest (pro-ASIN), NICHT
+    GET mit requested_codec/quality=Extreme (403) und NICHT der Batch-POST auf
+    1.0/content/licenserequest (UnknownOperationException).
+
+    WICHTIG: supported_drm_types darf NUR "Adrm" enthalten. Mit "Mpeg" mit in
+    der Liste liefert Audible ein AAXC-Container-File aus (major_brand=aaxc),
+    das trotz drm_type="Adrm" in der Antwort NICHT mit -activation_bytes
+    entschlüsselbar ist (ffmpeg dekodiert dann nur Rauschen). Mit NUR "Adrm"
+    kommt echtes Legacy-AAX zurück, das -activation_bytes korrekt entschlüsselt
+    (verifiziert gegen die Referenzimplementierung von audible-cli/mkb79).
+    """
     try:
-        resp = client.get(
+        resp = client.post(
             f"1.0/content/{asin}/licenserequest",
-            quality="Extreme",
-            consumption_type="Download",
-            requested_codec="AAX_22_128",
-            supported_drm_types="Adrm",
+            body={
+                "supported_drm_types": ["Adrm"],
+                "quality": "High",
+                "consumption_type": "Download",
+            },
         )
         meta = resp.get("content_license", {}).get("content_metadata", {})
         return meta.get("content_url", {}).get("offline_url")
@@ -41,29 +54,36 @@ def _get_aax_url(client: audible.Client, asin: str) -> Optional[str]:
 
 
 def _get_aaxc_data(client: audible.Client, asin: str) -> Optional[dict]:
-    """Holt URL + Voucher für AAXC-Inhalte (Audible Plus / Abo-Katalog)."""
+    """Holt URL + Voucher für AAXC-Inhalte (heute der Normalfall, auch für
+    gekaufte Bücher, nicht nur Audible-Plus/Abo-Inhalte).
+
+    Der Request fragt beide DRM-Typen an (wie die offizielle audible-cli es
+    tut). Die Antwort enthält KEIN direktes "voucher"-Feld mit Klartext-
+    key/iv — stattdessen muss das verschlüsselte "license_response"-Feld via
+    RSA mit dem Geräte-Private-Key entschlüsselt werden
+    (audible.aescipher.decrypt_voucher_from_licenserequest). Das Ergebnis
+    enthält dann den echten AES-Key+IV für ffmpegs -audible_key/-audible_iv.
+    """
     try:
         resp = client.post(
-            "1.0/content/licenserequest",
+            f"1.0/content/{asin}/licenserequest",
             body={
-                "asins": [asin],
-                "quality": "Extreme",
+                "supported_drm_types": ["Mpeg", "Adrm"],
+                "quality": "High",
                 "consumption_type": "Download",
-                "requested_codec": "AAXC",
-                "supported_drm_types": ["Adrm"],
-                "fulfill_drm": True,
             },
         )
-        licenses = resp.get("content_licenses", [])
-        if not licenses:
-            return None
-        lic = licenses[0]
-        meta = lic.get("content_metadata", {})
+        meta = resp.get("content_license", {}).get("content_metadata", {})
         url = meta.get("content_url", {}).get("offline_url")
-        voucher = lic.get("voucher", {})
-        key = voucher.get("key") or meta.get("adrm_key")
-        iv = voucher.get("iv") or meta.get("adrm_iv")
         if not url:
+            return None
+
+        from audible.aescipher import decrypt_voucher_from_licenserequest
+
+        voucher = decrypt_voucher_from_licenserequest(client.auth, resp)
+        key = voucher.get("key")
+        iv = voucher.get("iv")
+        if not (key and iv):
             return None
         return {"url": url, "key": key, "iv": iv}
     except Exception:
@@ -106,21 +126,18 @@ def download_book(
     safe_title = _sanitize_filename(title)
 
     with audible.Client(auth=auth) as client:
-        # Versuche zunächst das bevorzugte Format, dann das andere
-        if prefer_aaxc:
-            data = _get_aaxc_data(client, asin)
-            if data:
-                return _save_aaxc(auth, asin, safe_title, output_dir, data)
-            url = _get_aax_url(client, asin)
-            if url:
-                return _save_aax(auth, asin, safe_title, output_dir, url)
-        else:
-            url = _get_aax_url(client, asin)
-            if url:
-                return _save_aax(auth, asin, safe_title, output_dir, url)
-            data = _get_aaxc_data(client, asin)
-            if data:
-                return _save_aaxc(auth, asin, safe_title, output_dir, data)
+        # AAXC (mit RSA-entschlüsseltem Voucher) ist heute der zuverlässige
+        # Standardpfad - Audible liefert fuer die meisten Konten/Titel
+        # inzwischen auch bei "Adrm"-Anfragen ein AAXC-Container-File aus,
+        # das sich NICHT mit -activation_bytes entschlüsseln laesst. Echtes
+        # Legacy-AAX (aax-Demuxer, activation_bytes) ist nur noch der
+        # Fallback für ältere Konten/Inhalte, bei denen AAXC fehlschlägt.
+        data = _get_aaxc_data(client, asin)
+        if data:
+            return _save_aaxc(auth, asin, safe_title, output_dir, data)
+        url = _get_aax_url(client, asin)
+        if url:
+            return _save_aax(auth, asin, safe_title, output_dir, url)
 
     console.print(f"[red]✗ Kein Download-Link gefunden für {asin}[/red]")
     return None
@@ -174,22 +191,17 @@ def _save_aaxc(
 
 
 def get_activation_bytes(auth: audible.Authenticator) -> Optional[str]:
-    """Holt die Activation Bytes für AAX-Entschlüsselung via Audible-API."""
+    """Holt die Activation Bytes für AAX-Entschlüsselung.
+
+    Nutzt Authenticator.get_activation_bytes() (holt/entschlüsselt den
+    Activation-Blob vom Standard-Endpunkt und cached ihn in der
+    Authenticator-Instanz) statt eines nicht existierenden REST-Endpunkts
+    "1.0/activation/activationbytes" (lieferte früher immer None).
+    """
     try:
-        ab = auth.activation_bytes
+        ab = auth.get_activation_bytes()
         if ab:
             return ab
-    except Exception:
-        pass
-    try:
-        with audible.Client(auth=auth) as client:
-            resp = client.get("1.0/activation/activationbytes")
-            ab = resp.get("activation_bytes")
-            if ab:
-                # In Auth-Datei cachen
-                auth.activation_bytes = ab
-                auth.to_file(str(auth._filename if hasattr(auth, "_filename") else ""))
-                return ab
     except Exception:
         pass
     return None
