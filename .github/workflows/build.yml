@@ -180,8 +180,86 @@ jobs:
           name: linux-build
           path: AudibleDownloader-linux-x64.tar.gz
 
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: ffmpeg installieren (Homebrew)
+        run: brew install ffmpeg
+
+      - name: ffmpeg/ffprobe-Pfade ermitteln
+        id: ffmpeg
+        run: |
+          echo "ffmpeg=$(command -v ffmpeg)" >> "$GITHUB_OUTPUT"
+          echo "ffprobe=$(command -v ffprobe)" >> "$GITHUB_OUTPUT"
+
+      - name: Python-Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build mit PyInstaller (.app Bundle)
+        run: >
+          pyinstaller --noconfirm --windowed --name "Audible Downloader"
+          --icon icon.icns
+          --add-data "templates:templates"
+          --add-binary "${{ steps.ffmpeg.outputs.ffmpeg }}:."
+          --add-binary "${{ steps.ffmpeg.outputs.ffprobe }}:."
+          --hidden-import webview
+          --hidden-import webview.platforms.cocoa
+          --hidden-import jinja2
+          --hidden-import jinja2.ext
+          --hidden-import flask
+          --hidden-import flask.templating
+          --hidden-import audible
+          --hidden-import click
+          --hidden-import rich
+          --hidden-import httpx
+          --hidden-import h11
+          --hidden-import h2
+          --osx-bundle-identifier "de.local.audible-downloader"
+          run_app.py
+
+      - name: Smoke-Test (App startet, Flask antwortet)
+        run: |
+          open "dist/Audible Downloader.app"
+          ok=0
+          for i in $(seq 1 30); do
+            sleep 1
+            if curl -sf http://127.0.0.1:7842 >/dev/null; then
+              ok=1
+              break
+            fi
+          done
+          pkill -f "Audible Downloader" 2>/dev/null || true
+          if [ "$ok" -ne 1 ]; then
+            echo "App hat nicht innerhalb von 30s auf Port 7842 geantwortet"
+            exit 1
+          fi
+          echo "Smoke-Test OK"
+
+      - name: DMG erstellen
+        run: |
+          mkdir -p dmg-root
+          cp -r "dist/Audible Downloader.app" dmg-root/
+          ln -s /Applications dmg-root/Applications
+          hdiutil create -volname "Audible Downloader" \
+            -srcfolder dmg-root \
+            -ov -format UDZO \
+            AudibleDownloader-macos.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: AudibleDownloader-macos.dmg
+
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -197,3 +275,4 @@ jobs:
           files: |
             artifacts/windows-build/AudibleDownloader-windows-x64.zip
             artifacts/linux-build/AudibleDownloader-linux-x64.tar.gz
+            artifacts/macos-build/AudibleDownloader-macos.dmg
