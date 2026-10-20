@@ -228,10 +228,27 @@ def main():
         js_api=AudibleAPI(),
     )
 
+    # Flask laeuft mit threaded=True: Werkzeug startet fuer jede offene
+    # Verbindung (z.B. einen laufenden Download-Stream oder eine offene
+    # Server-Sent-Events-Verbindung fuer den Fortschritt) einen eigenen
+    # Handler-Thread. Diese Handler-Threads sind NICHT automatisch Daemon-
+    # Threads, auch wenn der Flask-Thread selbst einer ist - solange eine
+    # Verbindung offen ist, haelt ihr Thread den ganzen Python-Prozess am
+    # Leben, selbst nachdem das Fenster geschlossen wurde ("Server wird
+    # nicht richtig beendet"). Deshalb hier zusaetzlich hart beenden, wenn
+    # der User das Hauptfenster schliesst, statt auf das natuerliche
+    # Thread-Ende zu warten.
+    _main_window.events.closed += lambda: os._exit(0)
+
     # Linux-Bundles bringen PySide6/QtWebEngine mit (self-contained), statt sich
     # auf System-GTK/WebKit2GTK zu verlassen, das PyInstaller nicht bündeln kann.
     gui = "qt" if sys.platform.startswith("linux") else None
     webview.start(_load_when_ready, _main_window, private_mode=False, gui=gui)
+
+    # Falls webview.start() jemals regulaer zurueckkehrt (z.B. unter Linux/Qt
+    # nach dem letzten Fenster), ebenfalls hart beenden statt auf
+    # Hintergrund-Threads zu warten.
+    os._exit(0)
 
 
 if __name__ == "__main__":
