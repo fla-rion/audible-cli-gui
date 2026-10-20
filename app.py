@@ -261,12 +261,24 @@ def _get_aaxc_bulk(client, asin: str):
 
 
 # ── Download Thread ───────────────────────────────────────────────────────────
+#
+# Download und Konvertierung sind in zwei Phasen getrennt (_download_phase /
+# _postprocess_phase), damit _download_all_thread sie als Pipeline laufen
+# lassen kann: waehrend Buch N konvertiert wird, laedt Buch N+1 schon
+# parallel herunter, statt dass jeder Download erst auf die vorherige
+# Konvertierung warten muss (die den Download sonst komplett blockiert,
+# selbst bei sehr schnellen Verbindungen).
 
-def _download_thread(
+def _download_phase(
     task_id: str, asin: str, title: str,
-    output_dir: Path, convert_fmt, prefer_aaxc: bool,
-    multitrack: bool = False,
-):
+    output_dir: Path, prefer_aaxc: bool,
+) -> Optional[dict]:
+    """Laedt nur die Rohdatei (AAX/AAXC) herunter, konvertiert noch nicht.
+
+    Gibt bei Erfolg ein dict mit allen Infos zurueck, die _postprocess_phase
+    fuer die Konvertierung braucht, bei Fehler None (Task-Status ist dann
+    bereits auf "error" gesetzt).
+    """
     task = _tasks[task_id]
     safe = _sanitize(title)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -281,7 +293,7 @@ def _download_thread(
         logger.info(f"Starte Task {task_id} für {asin} ({title})")
         upd("Verbinde mit Audible...", 2)
         auth = load_auth()
-        
+
         user_agent = "Audible/3.56.2 (iPhone; iOS 15.1; Scale/3.00)"
 
         url = None
@@ -317,9 +329,9 @@ def _download_thread(
         # Header für den eigentlichen Datei-Download
         try:
             headers = dict(auth.access_headers)
-        except:
+        except Exception:
             headers = {"Authorization": f"Bearer {auth.access_token}"}
-        
+
         headers["User-Agent"] = user_agent
 
         with httpx.Client(follow_redirects=True, timeout=None) as http:
@@ -328,7 +340,7 @@ def _download_thread(
                     logger.info(f"HTTP Status: {r.status_code} für {asin}")
                     if r.status_code >= 400:
                         raise Exception(f"Server-Fehler {r.status_code}")
-                    
+
                     r.raise_for_status()
                     total = int(r.headers.get("content-length", 0))
                     done = 0
@@ -351,6 +363,34 @@ def _download_thread(
                 "iv":  voucher.get("iv",  ""),
             }))
 
+        upd("Download fertig, wartet auf Konvertierung...", 60)
+        return {"safe": safe, "fmt": fmt, "dest": dest, "voucher": voucher}
+
+    except Exception as e:
+        logger.exception(f"Task {task_id} (Download) fehlgeschlagen: {str(e)}")
+        task["status"] = "error"
+        task["message"] = str(e)
+        return None
+
+
+def _postprocess_phase(
+    task_id: str, asin: str, output_dir: Path, convert_fmt, multitrack: bool,
+    download_result: dict,
+):
+    """Konvertiert/teilt eine bereits heruntergeladene Datei (zweite Phase)."""
+    task = _tasks[task_id]
+    safe = download_result["safe"]
+    fmt = download_result["fmt"]
+    dest = download_result["dest"]
+    voucher = download_result["voucher"]
+
+    def upd(msg: str, pct: int = None, **kw):
+        task["message"] = msg
+        if pct is not None:
+            task["percent"] = pct
+        task.update(kw)
+
+    try:
         if multitrack and convert_fmt:
             target_fmt = convert_fmt
             upd(f"Kapitel aufteilen → {target_fmt.upper()}… 0%", 60)
@@ -416,23 +456,88 @@ def _download_thread(
         logger.info(f"Task {task_id} erfolgreich beendet.")
 
     except Exception as e:
-        logger.exception(f"Task {task_id} fehlgeschlagen: {str(e)}")
+        logger.exception(f"Task {task_id} (Konvertierung) fehlgeschlagen: {str(e)}")
         task["status"] = "error"
         task["message"] = str(e)
 
 
-# ── Download-All Worker ───────────────────────────────────────────────────────
+def _download_thread(
+    task_id: str, asin: str, title: str,
+    output_dir: Path, convert_fmt, prefer_aaxc: bool,
+    multitrack: bool = False,
+):
+    """Einzel-Download (nicht die Download-All-Pipeline): Download + direkt
+    anschliessende Konvertierung im selben Thread, wie bisher - hier gibt es
+    nur eine Datei, Parallelisierung bringt nichts."""
+    result = _download_phase(task_id, asin, title, output_dir, prefer_aaxc)
+    if result is None:
+        return
+    _postprocess_phase(task_id, asin, output_dir, convert_fmt, multitrack, result)
+
+
+# ── Download-All Worker (Pipeline: Download und Konvertierung parallel) ───────
+#
+# Mehrere Downloads laufen gleichzeitig in einem kleinen Thread-Pool (die
+# Audible-CDN-Downloads sind reines IO, die 5G/Glasfaser-Bandbreite wird so
+# tatsaechlich ausgenutzt statt ungenutzt zu bleiben, waehrend ffmpeg
+# konvertiert). Die Konvertierung selbst laeuft in einem einzigen
+# Worker-Thread sequenziell (ffmpeg ist CPU-gebunden; mehrere gleichzeitige
+# Konvertierungen wuerden sich nur gegenseitig ausbremsen), holt sich ihre
+# Jobs aber aus einer Queue, sodass sie nicht auf den naechsten Download
+# warten muss, sondern sofort weiterarbeitet, wenn ein Download fertig ist.
+
+MAX_PARALLEL_DOWNLOADS = 3
+
 
 def _download_all_thread(asin_list: list, output_dir: Path, convert_fmt, prefer_aaxc: bool):
+    import queue
+    from concurrent.futures import ThreadPoolExecutor
+
+    multitrack = False  # Download-All nutzt aktuell kein Multitrack-Splitting
+
+    # Bereits vorhandene Titel vorher herausfiltern (wie bisher)
+    to_fetch = []
     for asin, title in asin_list:
         safe = _sanitize(title)
         existing = list(output_dir.glob(f"{safe}.*"))
         already = [f for f in existing if f.suffix in (".aax", ".aaxc", ".m4b", ".mp3")]
         if already:
             continue
+        to_fetch.append((asin, title))
+
+    if not to_fetch:
+        return
+
+    convert_queue: "queue.Queue" = queue.Queue()
+    SENTINEL = object()
+
+    def _converter_worker():
+        while True:
+            item = convert_queue.get()
+            if item is SENTINEL:
+                break
+            task_id, asin, result = item
+            try:
+                _postprocess_phase(task_id, asin, output_dir, convert_fmt, multitrack, result)
+            except Exception:
+                logger.exception(f"Konvertierungs-Worker: unerwarteter Fehler bei Task {task_id}")
+
+    converter_thread = threading.Thread(target=_converter_worker, daemon=True)
+    converter_thread.start()
+
+    def _download_one(asin: str, title: str):
         tid = _new_task(asin, title)
-        _download_thread(tid, asin, title, output_dir, convert_fmt, prefer_aaxc)
-        time.sleep(1)
+        result = _download_phase(tid, asin, title, output_dir, prefer_aaxc)
+        if result is not None:
+            convert_queue.put((tid, asin, result))
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOWNLOADS) as pool:
+        futures = [pool.submit(_download_one, asin, title) for asin, title in to_fetch]
+        for f in futures:
+            f.result()  # Exceptions einzelner Downloads nicht verschlucken (werden geloggt)
+
+    convert_queue.put(SENTINEL)
+    converter_thread.join()
 
 
 # ── API ───────────────────────────────────────────────────────────────────────
