@@ -202,6 +202,40 @@ def _load_when_ready(window):
         window.load_url(APP_URL)
     else:
         window.load_html(ERROR_HTML)
+    threading.Thread(target=_check_for_update_async, args=(window,), daemon=True).start()
+
+
+def _check_for_update_async(window):
+    """Prueft nach dem Laden einmalig auf GitHub, ob eine neuere Version
+    vorliegt. Zeigt bei Fund einen einfachen JS-confirm() im Webview an -
+    kein eigenes HTML/CSS noetig, laeuft unabhaengig vom restlichen
+    Flask-Frontend. Scheitert die Abfrage (kein Internet etc.), passiert
+    einfach nichts - kein Fehlerdialog fuer einen optionalen Check."""
+    try:
+        import update_manager as um
+
+        time.sleep(2)  # UI zuerst fertig laden lassen
+        latest = um.check_for_update()
+        if not latest:
+            return
+        asset = um.get_platform_asset(latest)
+        if not asset:
+            return
+
+        changelog = (latest.body or "").replace("`", "'").replace("\n", "\\n")[:400]
+        question = (
+            f"Neue Version {latest.tag} verfuegbar (du hast {um.get_current_version()}).\\n\\n"
+            f"{changelog}\\n\\nJetzt herunterladen?"
+        )
+        accepted = window.evaluate_js(f"confirm('{question}')")
+        if not accepted:
+            return
+
+        dest_dir = os.path.join(os.path.expanduser("~"), "Downloads", "AudibleDownloader-Update")
+        path = um.download_asset(asset, dest_dir)
+        um.install_update(path)
+    except Exception:
+        pass  # optionaler Hintergrund-Check - nie die App stoeren
 
 
 # ── Einstiegspunkt ────────────────────────────────────────────────────────────
