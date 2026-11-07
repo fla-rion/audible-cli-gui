@@ -557,7 +557,35 @@ def api_status():
             locale = str(auth.locale)
         except Exception:
             logged_in = False
-    return jsonify({"logged_in": logged_in, "locale": locale, "locales": LOCALES})
+    import shared
+    return jsonify({"logged_in": logged_in, "locale": locale, "locales": LOCALES,
+                    "web_login": shared.login_url_callback is None})
+
+
+# -- Browser-Login (ohne pywebview): URL + Redirect-URL laufen ueber die Seite --
+_WEB_LOGIN_TIMEOUT = 600  # Sekunden
+_web_login = {"url": None, "redirect": None, "event": None}
+_web_login_lock = threading.Lock()
+
+
+def _web_login_callback(url: str) -> str:
+    """Stellt die Amazon-URL fuer die Seite bereit und wartet auf die Redirect-URL."""
+    import auth as _auth
+    event = threading.Event()
+    with _web_login_lock:
+        _web_login.update(url=url, redirect=None, event=event)
+    _auth.console.print(f"[bold yellow]Amazon-Login-URL:[/bold yellow] [cyan]{url}[/cyan]")
+    _auth.console.print("[dim]Die Seite oeffnet den Link; Redirect-URL dort einfuegen.[/dim]")
+    try:
+        if not event.wait(_WEB_LOGIN_TIMEOUT):
+            raise RuntimeError("Zeitueberschreitung beim Login.")
+        redirect = (_web_login["redirect"] or "").strip()
+        if not redirect:
+            raise RuntimeError("Login abgebrochen.")
+        return redirect
+    finally:
+        with _web_login_lock:
+            _web_login.update(url=None, redirect=None, event=None)
 
 
 @app.route("/api/login", methods=["POST"])
@@ -566,10 +594,39 @@ def api_login():
     locale = data.get("locale", "de")
     try:
         import shared
-        do_login(locale=locale, login_url_callback=shared.login_url_callback)
+        callback = shared.login_url_callback or _web_login_callback
+        do_login(locale=locale, login_url_callback=callback)
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/login/pending")
+def api_login_pending():
+    with _web_login_lock:
+        return jsonify({"url": _web_login["url"]})
+
+
+@app.route("/api/login/submit", methods=["POST"])
+def api_login_submit():
+    redirect = (request.get_json(force=True).get("redirect_url") or "").strip()
+    with _web_login_lock:
+        event = _web_login["event"]
+        if event is None:
+            return jsonify({"success": False, "error": "Kein Login aktiv."})
+        _web_login["redirect"] = redirect
+        event.set()
+    return jsonify({"success": True})
+
+
+@app.route("/api/login/cancel", methods=["POST"])
+def api_login_cancel():
+    with _web_login_lock:
+        event = _web_login["event"]
+        if event is not None:
+            _web_login["redirect"] = ""
+            event.set()
+    return jsonify({"success": True})
 
 
 @app.route("/api/logout", methods=["POST"])
