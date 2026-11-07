@@ -54,8 +54,14 @@ def login(locale: str = "de", login_url_callback: Optional[Callable] = None) -> 
         login_url_callback = _manual_callback
 
     try:
-        import uuid
-        serial = uuid.uuid4().hex.upper()
+        from audible.login import build_device_serial
+        # WICHTIG: NICHT uuid4().hex.upper() (32 Hex-Zeichen) verwenden - dieses
+        # alte Seriennummer-/Geraeteprofil-Format wird von Audible inzwischen
+        # mit "Denied"/"CustomerThrottled" auf JEDE Lizenzanfrage abgelehnt,
+        # unabhaengig vom Konto (siehe mkb79/Audible#909 + #910, gefixt in
+        # audible>=0.13.1). build_device_serial() liefert das neue, von
+        # Audible akzeptierte 40-Zeichen-Format samt passendem App-Profil.
+        serial = build_device_serial()
         auth = audible.Authenticator.from_login_external(
             locale=locale,
             login_url_callback=login_url_callback,

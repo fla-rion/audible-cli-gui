@@ -228,10 +228,22 @@ def main():
         js_api=AudibleAPI(),
     )
 
+    # Flasks Dev-Server startet pro offener Verbindung (laufender Download,
+    # offener Progress-Poll) einen Handler-Thread, der NICHT daemon ist -
+    # obwohl der Flask-Thread selbst daemon=True ist, haelt so ein einzelner
+    # offener Handler-Thread den gesamten Prozess im Hintergrund am Leben,
+    # auch nachdem das Fenster laengst geschlossen wurde ("laeuft random im
+    # Hintergrund"). os._exit(0) beim Schliessen erzwingt den echten Exit.
+    _main_window.events.closed += lambda: os._exit(0)
+
     # Linux-Bundles bringen PySide6/QtWebEngine mit (self-contained), statt sich
     # auf System-GTK/WebKit2GTK zu verlassen, das PyInstaller nicht bündeln kann.
     gui = "qt" if sys.platform.startswith("linux") else None
     webview.start(_load_when_ready, _main_window, private_mode=False, gui=gui)
+
+    # Falls webview.start() zurueckkehrt, ohne dass closed gefeuert hat
+    # (z.B. manche Plattform-Eigenheiten) - trotzdem hart beenden.
+    os._exit(0)
 
 
 if __name__ == "__main__":

@@ -47,10 +47,31 @@ def _get_aax_url(client: audible.Client, asin: str) -> Optional[str]:
                 "consumption_type": "Download",
             },
         )
-        meta = resp.get("content_license", {}).get("content_metadata", {})
+        cl = resp.get("content_license", {})
+        if cl.get("status_code") == "Denied":
+            _log_license_denial(asin, cl)
+            return None
+        meta = cl.get("content_metadata", {})
         return meta.get("content_url", {}).get("offline_url")
-    except Exception:
+    except Exception as e:
+        console.print(f"[red]AAX-Anfrage fehlgeschlagen für {asin}: {e}[/red]")
         return None
+
+
+def _log_license_denial(asin: str, content_license: dict) -> None:
+    """Gibt den echten Ablehnungsgrund von Audible aus, statt ihn zu
+    verschlucken. Ohne das hier sah JEDE Ablehnung (egal ob Konto-Drosselung,
+    abgelaufenes Geraeteprofil oder ein echtes Rechte-Problem bei einem
+    einzelnen Titel) nur wie ein generisches "kein Download-Link gefunden"
+    aus - nicht unterscheidbar und nicht diagnostizierbar."""
+    reasons = content_license.get("license_denial_reasons") or []
+    msg = content_license.get("message", "")
+    console.print(f"[red]✗ Lizenz abgelehnt für {asin}: {msg}[/red]")
+    for r in reasons:
+        console.print(
+            f"  [yellow]{r.get('validationType')}/{r.get('rejectionReason')}:[/yellow] "
+            f"{r.get('message')}"
+        )
 
 
 def _get_aaxc_data(client: audible.Client, asin: str) -> Optional[dict]:
@@ -73,7 +94,11 @@ def _get_aaxc_data(client: audible.Client, asin: str) -> Optional[dict]:
                 "consumption_type": "Download",
             },
         )
-        meta = resp.get("content_license", {}).get("content_metadata", {})
+        cl = resp.get("content_license", {})
+        if cl.get("status_code") == "Denied":
+            _log_license_denial(asin, cl)
+            return None
+        meta = cl.get("content_metadata", {})
         url = meta.get("content_url", {}).get("offline_url")
         if not url:
             return None
@@ -86,7 +111,8 @@ def _get_aaxc_data(client: audible.Client, asin: str) -> Optional[dict]:
         if not (key and iv):
             return None
         return {"url": url, "key": key, "iv": iv}
-    except Exception:
+    except Exception as e:
+        console.print(f"[red]AAXC-Anfrage fehlgeschlagen für {asin}: {e}[/red]")
         return None
 
 
