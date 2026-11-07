@@ -244,6 +244,44 @@ def activation_bytes_cmd(show):
 
 
 # ---------------------------------------------------------------------------
+# Update
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--install", is_flag=True, default=False, help="Nach dem Download direkt öffnen")
+def update(install):
+    """Prüft auf eine neuere Version auf GitHub und lädt sie bei Bedarf herunter."""
+    import update_manager as um
+    from version import __version__
+
+    console.print(f"[dim]Aktuelle Version: {__version__}[/dim]")
+    with console.status("Prüfe auf Updates..."):
+        latest = um.check_for_update()
+
+    if not latest:
+        console.print("[green]✓ Du hast bereits die neueste Version.[/green]")
+        return
+
+    console.print(f"[bold cyan]Neue Version verfügbar: {latest.tag}[/bold cyan]")
+    if latest.body:
+        console.print(f"[dim]{latest.body[:500]}[/dim]")
+
+    asset = um.get_platform_asset(latest)
+    if not asset:
+        console.print("[yellow]Kein passendes Download-Paket für diese Plattform gefunden.[/yellow]")
+        return
+
+    console.print(f"[dim]Lade {asset.name} ({um.format_size(asset.size)})...[/dim]")
+    dest_dir = str(Path.home() / "Downloads" / "AudibleDownloader-Update")
+    path = um.download_asset(asset, dest_dir)
+    console.print(f"[green]✓ Heruntergeladen:[/green] {path}")
+
+    if install:
+        ok, msg = um.install_update(path)
+        console.print(f"[{'green' if ok else 'red'}]{msg}[/{'green' if ok else 'red'}]")
+
+
+# ---------------------------------------------------------------------------
 # Hilfsfunktion
 # ---------------------------------------------------------------------------
 
